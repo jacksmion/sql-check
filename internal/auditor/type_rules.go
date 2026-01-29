@@ -3,6 +3,7 @@ package auditor
 import (
 	"fmt"
 	"sql-check/internal/model"
+	"sql-check/internal/parser"
 	"strings"
 
 	"github.com/pingcap/tidb/parser/ast"
@@ -18,18 +19,12 @@ func (r *ImplicitConversionRule) Check(seg *model.SQLSegment, node ast.StmtNode,
 	var issues []model.Issue
 
 	// Find the table name first (reusing logic from IndexMissRule would be better, but duplication for now is safer)
+	// Find the table name first
+	tables := parser.ExtractTableNames(node)
 	var tableName string
-	switch stmt := node.(type) {
-	case *ast.SelectStmt:
-		if stmt.From != nil {
-			if ts, ok := stmt.From.TableRefs.Left.(*ast.TableSource); ok {
-				if tn, ok := ts.Source.(*ast.TableName); ok {
-					tableName = tn.Name.O
-				}
-			}
-		}
+	if len(tables) > 0 {
+		tableName = tables[0]
 	}
-	// Also support Update/Delete if needed, focused on Select for now
 
 	if tableName == "" {
 		return nil, nil

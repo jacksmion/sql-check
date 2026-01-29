@@ -3,6 +3,7 @@ package auditor
 import (
 	"fmt"
 	"sql-check/internal/model"
+	"sql-check/internal/parser"
 
 	"github.com/pingcap/tidb/parser/ast"
 )
@@ -16,38 +17,20 @@ func (r *IndexMissRule) Check(seg *model.SQLSegment, node ast.StmtNode, schema *
 	var issues []model.Issue
 
 	// 1. Identify Target Table Name and WHERE clause
-	var tableName string
-	var whereExpr ast.ExprNode
+	// 1. Identify Target Table Name and WHERE clause
+	tables := parser.ExtractTableNames(node)
+	if len(tables) == 0 {
+		return nil, nil
+	}
+	tableName := tables[0] // Simplify: check strictly the first table found
 
+	var whereExpr ast.ExprNode
 	switch stmt := node.(type) {
 	case *ast.SelectStmt:
-		if stmt.From != nil && len(stmt.From.TableRefs.Left.(*ast.TableSource).Source.(*ast.TableName).Name.O) > 0 {
-			// Very simplified: takes the first table. JOINs are harder.
-			// Ideally we traverse Join nodes.
-			if ts, ok := stmt.From.TableRefs.Left.(*ast.TableSource); ok {
-				if tn, ok := ts.Source.(*ast.TableName); ok {
-					tableName = tn.Name.O
-				}
-			}
-		}
 		whereExpr = stmt.Where
 	case *ast.UpdateStmt:
-		if stmt.TableRefs != nil && stmt.TableRefs.TableRefs != nil {
-			if ts, ok := stmt.TableRefs.TableRefs.Left.(*ast.TableSource); ok {
-				if tn, ok := ts.Source.(*ast.TableName); ok {
-					tableName = tn.Name.O
-				}
-			}
-		}
 		whereExpr = stmt.Where
 	case *ast.DeleteStmt:
-		if stmt.TableRefs != nil && stmt.TableRefs.TableRefs != nil {
-			if ts, ok := stmt.TableRefs.TableRefs.Left.(*ast.TableSource); ok {
-				if tn, ok := ts.Source.(*ast.TableName); ok {
-					tableName = tn.Name.O
-				}
-			}
-		}
 		whereExpr = stmt.Where
 	}
 
@@ -133,20 +116,44 @@ type columnVisitor struct {
 }
 
 func (v *columnVisitor) Enter(in ast.Node) (ast.Node, bool) {
+	if funcCall, ok := in.(*ast.FuncCallExpr); ok {
+		// Traverse function arguments to mark columns as used inside function
+		for _, arg := range funcCall.Args {
+			checkForColumn(arg, v.cols, true)
+		}
+		return in, true // Skip children as we handled them manually
+	}
+
 	if col, ok := in.(*ast.ColumnName); ok {
-		v.cols[col.Name.O] = true
+		v.cols[col.Name.O] = false // false means "clean usage" (not in function)
 	}
 	
-	// Handle cases like "WHERE function(col)" -> This usually invalidates the index usage for that col
-	// But our simplified logic just checks if col appears. 
-	// To be stricter, we should check parent nodes.
-	// For now, simple "is present" is good enough for a basic "Leftmost Prefix" check.
-	// Refinement: If inside FuncCallExpr, we might want to ignore it or flag it?
-	// Leaving simple for now.
-
 	return in, false
 }
 
 func (v *columnVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
+}
+
+func checkForColumn(node ast.Node, cols map[string]bool, inFunc bool) {
+	if col, ok := node.(*ast.ColumnName); ok {
+		if !inFunc {
+			cols[col.Name.O] = true
+		}
+	} else {
+		// Manual recursion for common expression types used in args
+		// This is a simplified traversal since we don't have the visitor here
+		switch expr := node.(type) {
+		case *ast.BinaryOperationExpr:
+			checkForColumn(expr.L, cols, inFunc)
+			checkForColumn(expr.R, cols, inFunc)
+		case *ast.ParenthesesExpr:
+			checkForColumn(expr.Expr, cols, inFunc)
+		case *ast.FuncCallExpr:
+			for _, arg := range expr.Args {
+				checkForColumn(arg, cols, true) // Nested function is still inFunc=true
+			}
+		// Add other types as needed
+		}
+	}
 }

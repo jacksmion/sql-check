@@ -1,8 +1,6 @@
 package extractor
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,42 +19,62 @@ func NewRegexExtractor() *RegexExtractor {
 }
 
 // Patterns for different quote types
-// Note: We use non-greedy *? to stop at the first closing quote
-// We can't use backreferences in Go regexp (RE2)
+// Note: We use (?s) to allow . to match newlines for multi-line support
 var (
-	doubleQuoteSQL = regexp.MustCompile(`"(?i)(?:SELECT|INSERT|UPDATE|DELETE)\b.*?"`)
-	singleQuoteSQL = regexp.MustCompile(`'(?i)(?:SELECT|INSERT|UPDATE|DELETE)\b.*?'`)
-	backTickSQL    = regexp.MustCompile("`(?i)(?:SELECT|INSERT|UPDATE|DELETE)\\b.*?`")
+	doubleQuoteSQL = regexp.MustCompile(`(?s)"(?i)(?:SELECT|INSERT|UPDATE|DELETE)\b.*?"`)
+	singleQuoteSQL = regexp.MustCompile(`(?s)'(?i)(?:SELECT|INSERT|UPDATE|DELETE)\b.*?'`)
+	backTickSQL    = regexp.MustCompile("(?s)`(?i)(?:SELECT|INSERT|UPDATE|DELETE)\\b.*?`")
 )
 
 func (e *RegexExtractor) Extract(filePath string, content []byte) ([]model.SQLSegment, error) {
 	var segments []model.SQLSegment
 	
-	scanner := bufio.NewScanner(bytes.NewReader(content))
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
+	// Convert content to string once (allocating) is okay for now
+	text := string(content)
 
-		for _, re := range []*regexp.Regexp{doubleQuoteSQL, singleQuoteSQL, backTickSQL} {
-			matches := re.FindAllString(line, -1)
-			for _, match := range matches {
-				if len(match) >= 2 {
-					// Strip quotes
-					sqlContent := match[1 : len(match)-1]
-					segments = append(segments, model.SQLSegment{
-						SQL: sqlContent,
-						Location: model.Location{
-							FilePath: filePath,
-							Line:     lineNo,
-						},
-						Language: "detected",
-					})
-				}
-			}
+	// Pre-calculate line offsets for fast line number lookup
+	lineOffsets := make([]int, 0)
+	for i, b := range text {
+		if b == '\n' {
+			lineOffsets = append(lineOffsets, i)
 		}
 	}
 
+	getLineNo := func(idx int) int {
+		// Binary search or linear scan. Linear is fine for now.
+		line := 1
+		for _, offset := range lineOffsets {
+			if offset < idx {
+				line++
+			} else {
+				break
+			}
+		}
+		return line
+	}
+
+	for _, re := range []*regexp.Regexp{doubleQuoteSQL, singleQuoteSQL, backTickSQL} {
+		// FindStringIndex returns [start, end] byte offsets
+		matches := re.FindAllStringIndex(text, -1)
+		for _, matchPos := range matches {
+			start, end := matchPos[0], matchPos[1]
+			matchedStr := text[start:end]
+			
+			if len(matchedStr) >= 2 {
+				// Strip quotes
+				sqlContent := matchedStr[1 : len(matchedStr)-1]
+				
+				segments = append(segments, model.SQLSegment{
+					SQL: sqlContent,
+					Location: model.Location{
+						FilePath: filePath,
+						Line:     getLineNo(start),
+					},
+					Language: "detected",
+				})
+			}
+		}
+	}
 	
 	return segments, nil
 }
