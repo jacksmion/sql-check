@@ -1,0 +1,14 @@
+# Binaries
+sql-check
+sql-check.exe
+
+# Reports
+*.html
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
