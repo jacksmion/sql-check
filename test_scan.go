@@ -14,4 +14,13 @@ func main() {
     
     q8 := "SELECT * FROM users WHERE email = 'test@example.com'" // GOOD: Index Hit
     s := "SELECTING items is fun" 
+    _ = q1
+    _ = q2
+    _ = q3
+    _ = q4
+    _ = q5
+    _ = q6
+    _ = q7
+    _ = q8
+    _ = s
 }

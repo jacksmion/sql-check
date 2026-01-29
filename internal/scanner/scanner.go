@@ -48,30 +48,48 @@ func (fw *FileWalker) Walk(ctx context.Context, root string) (<-chan string, <-c
 			default:
 			}
 
-			// TODO: Add .gitignore support here
-
-			if d.IsDir() {
-				// Check for exclusions (Simple containment or glob)
-				for _, exclude := range fw.Excludes {
-					if strings.Contains(path, exclude) {
-						return filepath.SkipDir
-					}
-				}
-				if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
-					return filepath.SkipDir // Skip hidden directories like .git
-				}
+			// Get relative path
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			if rel == "." {
 				return nil
 			}
 
-			// File filtering logic
-			// Check exclusions for files (e.g. *_test.go)
-			for _, exclude := range fw.Excludes {
-				matched, _ := filepath.Match(exclude, d.Name())
-				if matched || strings.Contains(path, exclude) {
-					return nil // Skip this file
+			// Normalize and split
+			rel = filepath.ToSlash(rel)
+			parts := strings.Split(rel, "/")
+
+			// Check if any part of the path is excluded or hidden
+			for _, part := range parts {
+				// Skip hidden
+				if strings.HasPrefix(part, ".") && part != "." {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				// Skip excluded
+				for _, exclude := range fw.Excludes {
+					if part == exclude {
+						if d.IsDir() {
+							return filepath.SkipDir
+						}
+						return nil
+					}
+					if matched, _ := filepath.Match(exclude, part); matched {
+						if d.IsDir() {
+							return filepath.SkipDir
+						}
+						return nil
+					}
 				}
 			}
 
+			if d.IsDir() {
+				return nil
+			}
 
 			// Check extension
 			ext := strings.ToLower(filepath.Ext(path))

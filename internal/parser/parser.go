@@ -79,6 +79,17 @@ func parseCreateTable(node *ast.CreateTableStmt) *model.Table {
 			Name: col.Name.Name.O,
 			Type: col.Tp.String(), // Simplified type
 		}
+
+		// Check for inline PRIMARY KEY
+		for _, opt := range col.Options {
+			if opt.Tp == ast.ColumnOptionPrimaryKey {
+				t.Indexes = append(t.Indexes, &model.Index{
+					Name:    "PRIMARY",
+					Unique:  true,
+					Columns: []string{col.Name.Name.O},
+				})
+			}
+		}
 	}
 
 	// 2. Constraints (PK, Unique, etc defined inline or at bottom)
